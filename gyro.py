@@ -5,8 +5,11 @@ import binascii
 from logging.handlers import TimedRotatingFileHandler
 from binascii import *
 from struct import *
+import sys
 
 #gp = "\x55\x55\x47\x50\x02\x41\x32\xB4\xC5" #Data poll request packet
+
+log_file_name = "unknownID"
 
 class crcException(Exception):
     pass
@@ -40,16 +43,16 @@ def checkCrc(data):
         #check double messages
         splitlist = hexlify(data).split("faff")
         if len(splitlist) > 2:
-            print "Got two messages."
-            print "Checking first message:"
-            print "faff"+splitlist[1]
+            #print "Got two messages."
+            #print "Checking first message:"
+            #print "faff"+splitlist[1]
             return checkCrc(unhexlify("faff"+splitlist[1]))
         else:
             raise crcException("CRC recv mismatch.")
 
 def read(ser, dlen):
     raw = ser.read(dlen)
-    print hexlify(raw)
+    #print hexlify(raw)
     data = checkCrc(raw)
     mid = hexlify(data[2:3])
     if(mid == "42"):
@@ -78,19 +81,14 @@ def addCrc(data):
 
 def write(ser, data):
     dsend = addCrc(data)
-    print "Sending: ",hexlify(dsend),
+    #print "Sending: ",hexlify(dsend),
     ser.write(dsend)
 
-def create_timed_rotating_log(path):
+def create_timed_rotating_log(port):
     """"""
-    # logger = logging.getLogger("Rotating Log")
-    # logger.setLevel(logging.INFO)
+    logger = logging.getLogger("Rotating Log")
+    logger.setLevel(logging.DEBUG)
 
-    # handler = TimedRotatingFileHandler(path,
-    #                                    when="D",
-    #                                    interval=1,
-    #                                    backupCount=87600) #10 years of sampling
-    # logger.addHandler(handler)
 
     #Enter config mod
 
@@ -104,9 +102,11 @@ def create_timed_rotating_log(path):
 
     CM_SET_ACK = "\xFA\xFF\x31\x00\xD0"
     MM_SET_ACK = "\xFA\xFF\x11\x00\xF0" #Goto measurement mode
+
+    REQ_DID = "\xFA\xFF\x00\x00"
     #setpermcf = "\xFA\xFF\x48\x08\x00\x00\x00\x02\x00\x00\x00\x00"
-    print "Opening /dev/tty.usbserial-XST00EIX"
-    with serial.Serial('/dev/tty.usbserial-XST00EIX', 115200, timeout=5) as ser:
+    print "Opening ",port
+    with serial.Serial(port, 115200, timeout=5) as ser:
 
         print "Goto config mode."
         write(ser,CM_SET) #Poll data
@@ -117,33 +117,48 @@ def create_timed_rotating_log(path):
                 print "Entered config mode."
             else:
                 print "Error. Config mode not entered upon request. Now exiting."
-                exit(0)
+                #exit(0)
         except:
             raise
 
-        # print "Setting sync settings"
-        # write(ser,POLL_CONF_SET) #Poll data
-        # try:
-        #     rdata = read(ser, 1);
-        #     print "Resp: ",hexlify(rdata)
-        # except:
-        #     raise
+        print "Get device ID"
+        write(ser,REQ_DID) #Poll data
+        try:
+            rdata = read(ser, 9);
+            print "Resp: ",hexlify(rdata)
+            print "Device ID: ",hexlify(rdata)[8:-2]
+            log_file_name = hexlify(rdata)[8:-2]
+            handler = TimedRotatingFileHandler(''.join(["/data/gyro/",log_file_name,".log"]),
+                                               when="D",
+                                               interval=1,
+                                               backupCount=87600) #10 years of sampling
+            logger.addHandler(handler)
+        except:
+            raise
 
-        # print "Setting outputmode"
-        # write(ser,OM_SET)
-        # try:
-        #     rdata = read(ser, 5);
-        #     print "  Resp: ",hexlify(rdata)
-        # except:
-        #     raise
+        print "Setting sync settings"
+        write(ser,POLL_CONF_SET) #Poll data
+        try:
+            rdata = read(ser, 5);
+            print "Resp: ",hexlify(rdata)
+        except:
+            raise
 
-        # print "Setting quaternions."
-        # write(ser,QUAT_SET)
-        # try:
-        #     rdata = read(ser, 5);
-        #     print "  Resp: ",hexlify(rdata)
-        # except:
-        #     raise
+        print "Setting outputmode"
+        write(ser,OM_SET)
+        try:
+            rdata = read(ser, 5);
+            print "  Resp: ",hexlify(rdata)
+        except:
+            raise
+
+        print "Setting quaternions."
+        write(ser,QUAT_SET)
+        try:
+            rdata = read(ser, 5);
+            print "  Resp: ",hexlify(rdata)
+        except:
+            raise
 
         print "Goto measurement mode."
         write(ser,MM_SET)
@@ -158,19 +173,20 @@ def create_timed_rotating_log(path):
         except:
             raise
 
-
         # while True:
         #     rdata = read(ser, 37)
         #     print hexlify(rdata)
+        time.sleep(0.5)
 
-        print "Making polls:"
-        while True:
-            write(ser,poll)
-            try:
-                rdata = read(ser, 63);
-                print "  Resp: ",hexlify(rdata)
-            except:
-                raise
+        #print "Making polls:"
+        #while True:
+        #    write(ser,poll)
+        #    #time.sleep(0.1)
+        #    try:
+        #        rdata = read(ser, 59);
+        #        print "  Resp: ",hexlify(rdata)
+        #    except:
+        #        raise
 
         # print "Setting quaternions"
         # write(ser,om)
@@ -185,27 +201,32 @@ def create_timed_rotating_log(path):
         # ans = hexlify(read)
         # print ans,out
 
-        return
+        #return
+
+        print "Logging for unit",log_file_name,"has started."
 
         while True:
             try:
-                #t_ = time.time() #Store beginning time
-                ser.write(poll) #Poll data
-                out = ser.read(63) #Read 37 data bytes
-                ahex = binascii.hexlify(out) #Convert to hex ascii
+                t_ = time.time() #Store beginning time
+                write(ser, poll) #Poll data
+                out = read(ser, 59) #Read 59 data bytes
+                ahex = hexlify(out) #Convert to hex ascii
+                logger.debug('\t'.join([str(time.time()),ahex]))
+                #print '\t'.join([str(time.time()),ahex])
 
-                time.sleep(0.1);
-                #t2_ = time.time()
-                #sleeptime =  0.1 - (t2_ - t_) #Calculate nominal sleeping time
-                #time.sleep(sleeptime)
-                #logger.info('\t'.join([str(time.time()),ahex]))
-                #print ahex
+                #time.sleep(0.1);
+                t2_ = time.time()
+                sleeptime =  0.1 - (t2_ - t_) #Calculate nominal sleeping time
+                if sleeptime > 0:
+                    time.sleep(sleeptime)
+                else:
+                    print "Missed logging cycle. Tried to sleep",sleeptime
             except KeyboardInterrupt:
                 raise
             except:
-                pass
+                raise
 
 #----------------------------------------------------------------------
 if __name__ == "__main__":
-    log_file = "/data/gyro/gyro.log"
-    create_timed_rotating_log(log_file)
+    #log_file = "/data/gyro/gyro.log"
+    create_timed_rotating_log(sys.argv[1])
